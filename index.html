@@ -161,7 +161,7 @@ function settings(){
   return '<h1>Settings</h1><div class="date">Version '+VER+'</div>'+
   '<div class="card glass">'+
   '<div class="row"><span>Appearance<br><span class="sub" style="font-size:12px">Auto follows your device</span></span><div class="seg">'+th.map(function(t){return '<button class="glass'+(S.theme===t?' on':'')+'" data-th="'+t+'">'+t[0].toUpperCase()+t.slice(1)+'</button>'}).join('')+'</div></div></div>'+
-  '<div class="card glass"><div class="row"><span>Backup</span><div class="seg"><button class="glass" id="bcopy">Copy</button><button class="glass" id="brest">Restore</button></div></div>'+
+  '<div class="card glass"><div class="row"><span>Backup</span><div class="seg"><button class="glass" id="bcopy">Copy</button><button class="glass" id="brest">Restore</button><button class="glass" id="bdown">Download .json</button></div></div>'+
   '<textarea id="bk" rows="3" style="margin-top:12px" placeholder="Copy shows your data here. Paste data here, then Restore."></textarea><div class="hint" id="bm">'+esc(msg||('Last backup: '+(S.lastBackup?fmt(key(new Date(S.lastBackup))):'never')))+'</div></div>'+
   '<div class="card glass"><div class="row"><span>Get the latest version<br><span class="sub" style="font-size:12px">Your records stay on this device.</span></span><button class="btn glass on" id="upg">Upgrade</button></div></div><div class="hint" style="text-align:center;margin-top:22px">Made quietly. Kept on this device.</div>';
 }
@@ -208,16 +208,13 @@ document.addEventListener('click',function(e){
     case 'gm':S.goal=Math.max(1,S.goal-1);save();render();break;
     case 'gp':S.goal=Math.min(7,S.goal+1);save();render();break;
     case 'bcopy':
-      var j=JSON.stringify({days:S.days,goal:S.goal}),bk=$('bk');bk.value=j;bk.select();S.lastBackup=Date.now();save();
-      try{navigator.clipboard.writeText(j).then(function(){$('bm').textContent='Copied.'},function(){$('bm').textContent='Select the text above and copy it.'});}catch(x){$('bm').textContent='Select the text above and copy it.';}
+      doBackup();
       break;
     case 'brest':
-      try{var d=JSON.parse($('bk').value);if(!d||typeof d.days!=='object')throw 0;
-        if(!confirm('Replace current records with this backup?'))break;
-        S.days=d.days;if(d.goal)S.goal=d.goal;
-        Object.keys(S.days).forEach(function(k){var v=S.days[k];if(Array.isArray(v)||!v||typeof v!=='object')S.days[k]={n:''};});
-        save();msg='Restored.';render();
-      }catch(x){$('bm').textContent='That does not look like a backup.';}
+      doRestore($('bk').value);
+      break;
+    case 'bdown':
+      doDownload('tide-backup.json');
       break;
     case 'upg':
       t.textContent='Updating…';
@@ -226,6 +223,22 @@ document.addEventListener('click',function(e){
       break;
   }
 });
+/* backup/restore upgrade: gzip+base64 copy, json file download, manual-copy fallback, old-format compatible */
+var TEMP_KEY='__bb_restore_tmp__';
+function bbB64e(b){var s='',i;for(i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s);}
+function bbB64d(s){var x=atob(s),o=new Uint8Array(x.length),i;for(i=0;i<x.length;i++)o[i]=x.charCodeAt(i);return o;}
+function bbGzip(b){var c=new CompressionStream('gzip'),w=c.writable.getWriter();w.write(b);w.close();return new Response(c.readable).arrayBuffer().then(function(a){return new Uint8Array(a);});}
+function bbGunzip(b){var c=new DecompressionStream('gzip'),w=c.writable.getWriter();w.write(b);w.close();return new Response(c.readable).arrayBuffer().then(function(a){return new Uint8Array(a);});}
+function bbAll(){var m={},i,k;for(i=0;i<localStorage.length;i++){k=localStorage.key(i);if(k!==TEMP_KEY)m[k]=localStorage.getItem(k);}return m;}
+function bbSetMsg(t){var e=document.getElementById('bm');if(e)e.textContent=t;}
+function bbSnap(){var s={},i,k;for(i=0;i<localStorage.length;i++){k=localStorage.key(i);if(k!==TEMP_KEY)s[k]=localStorage.getItem(k);}try{localStorage.setItem(TEMP_KEY,JSON.stringify(s));}catch(e){}}
+function bbCopy(t){var ta=document.getElementById('bk');function fail(){if(ta){ta.focus();if(ta.select)ta.select();}bbSetMsg('剪贴板不可用，请长按上面的文本框手动复制。');}try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){bbSetMsg('已复制，可粘贴到备忘录或文件 App。');},function(){fail();});return;}}catch(e){}fail();}
+function doBackup(){try{if(typeof CompressionStream==='undefined')throw 0;var m=bbAll(),gz=bbGzip(new TextEncoder().encode(JSON.stringify(m)));gz.then(function(u){var w=bbB64e(u).replace(/(.{80})/g,'$1\n'),ta=document.getElementById('bk');if(ta){ta.value=w;if(ta.select)ta.select();}S.lastBackup=Date.now();save();bbCopy(w);}).catch(function(){bbSetMsg('压缩失败，请改用 Download .json 按钮。');});}catch(e){bbSetMsg('你的浏览器不支持压缩，请更新 iPad 系统，或用 Download .json 按钮。');}}
+function doDownload(fn){try{var m=bbAll(),blob=new Blob([JSON.stringify(m,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=fn||'backup.json';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(url);},2000);bbSetMsg('已生成备份文件，可存到文件 App。');}catch(e){bbSetMsg('生成文件失败。');}}
+function doRestore(text){if(typeof DecompressionStream==='undefined'){bbSetMsg('你的浏览器不支持解压，请更新 iPad 系统。');return;}var clean=(text||'').replace(/\s+/g,'');if(!clean){bbSetMsg('请先粘贴备份内容。');return;}try{var bytes=bbB64d(clean);bbGunzip(bytes).then(function(u){var parsed;try{parsed=JSON.parse(new TextDecoder().decode(u));}catch(e){tryOld();return;}if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed)){var ok=true,k;for(k in parsed){if(typeof parsed[k]!=='string'){ok=false;break;}}if(ok){finishRestore(parsed);return;}}tryOld();}).catch(function(){tryOld();});}catch(e){tryOld();}}
+function tryOld(){try{var old=JSON.parse(clean),map;if(old&&typeof old==='object'&&old.days&&typeof old.days==='object'){var d=(K==='sol-v1')?{days:{},theme:'auto'}:{days:{},goal:4,theme:'auto'};map={};map[K]=JSON.stringify(Object.assign(d,old));finishRestore(map);return;}}catch(e){}bbSetMsg('备份格式认不出来，没有改动任何数据。');}
+function finishRestore(m){try{bbSnap();}catch(e){}var k;for(k in m){if(k===TEMP_KEY)continue;try{localStorage.setItem(k,m[k]);}catch(e){}}reloadState();try{render();}catch(e){}bbSetMsg('恢复成功');}
+function reloadState(){var d=(K==='sol-v1')?{days:{},theme:'auto'}:{days:{},goal:4,theme:'auto'};try{var r=localStorage.getItem(K);if(r){var o=JSON.parse(r);if(o&&o.days)S=Object.assign(d,o);}}catch(e){}if(S.days)Object.keys(S.days).forEach(function(k){var v=S.days[k];if(Array.isArray(v)||typeof v!=='object'||!v)S.days[k]={n:''};});}
 applyTheme();render();
 </script>
 </body>
